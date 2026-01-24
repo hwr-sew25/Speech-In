@@ -1,0 +1,5 @@
+<launch>
+    <!-- Startet den Speech-Node -->
+    <node name="speech_in_node" pkg="speech_in" type="speech_node.py" output="screen">
+    </node>
+</launch>

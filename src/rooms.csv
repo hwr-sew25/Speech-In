@@ -1,0 +1,77 @@
+id,building,room_id,room_name,floor,wing,category,gender,accessible,notes
+1,B,016,,EG,Ost,TRH,,FALSE,TRH4 Raum 016
+2,B,021A,Gebäudemanagement,EG,West,Büro,,FALSE,
+3,B,022,,EG,West,Büro,,FALSE,
+4,B,032,,EG,West,Büro,,FALSE,
+5,B,092,,EG,West,TRH,,FALSE,TRH1 Raum 092
+6,B,094,,EG,West,TRH,,FALSE,TRH2 Raum 094
+7,B,096,,EG,Ost,TRH,,FALSE,TRH3 Raum 096
+8,B,114,,1,Ost,TRH,,FALSE,TRH4 Raum 114
+9,B,121,Büro,1,West,Büro,,FALSE,
+10,B,122,Büro,1,West,Büro,,FALSE,
+11,B,123,Büro,1,West,Büro,,FALSE,
+12,B,124,Büro,1,Ost,Büro,,FALSE,
+13,B,125,Büro,1,Ost,Büro,,FALSE,
+14,B,126,Büro,1,Ost,Büro,,FALSE,
+15,B,127,Büro,1,Ost,Büro,,FALSE,
+16,B,128,Büro,1,Ost,Büro,,FALSE,
+17,B,129,Seminarraum,1,Ost,Seminarraum,,FALSE,
+18,B,130,Seminarraum,1,Ost,Seminarraum,,FALSE,
+19,B,131,Büro,1,West,Büro,,FALSE,
+20,B,132,Büro,1,West,Büro,,FALSE,
+21,B,192,,1,West,TRH,,FALSE,TRH1 Raum 192
+22,B,194,,1,West,TRH,,FALSE,TRH2 Raum 194
+23,B,196,,1,Ost,TRH,,FALSE,TRH3 Raum 196
+24,B,207,,2,Ost,TRH,,FALSE,TRH4 Raum 207
+25,B,220,Vortragsraum,2,West,Vortragsraum,,FALSE,
+26,B,221,WC Herren,2,West,WC,Herren,FALSE,
+27,B,221A,WC H Vorraum,2,West,WC_Vorraum,Herren,FALSE,
+28,B,221B,WC Beh.,2,West,WC_barrierefrei,,TRUE,
+29,B,222,Flur,2,West,Flur,,FALSE,
+30,B,223,Teeküche,2,West,Teeküche,,FALSE,
+31,B,224,Flur,2,Ost,Flur,,FALSE,
+32,B,233,Stuhllager,2,Ost,Lager,,FALSE,Medientechnik
+33,B,233A,WC D,2,Ost,WC,Damen,FALSE,
+34,B,233B,WC D Vor.,2,Ost,WC_Vorraum,Damen,FALSE,
+35,B,292,,2,West,TRH,,FALSE,TRH1 Raum 292
+36,B,294,,2,West,TRH,,FALSE,TRH2 Raum 294
+37,B,296,,2,Ost,TRH,,FALSE,TRH3 Raum 296
+38,B,310,,3,Ost,TRH,,FALSE,TRH4 Raum 310
+39,B,321,Büro,3,West,Büro,,FALSE,
+40,B,322,Büro,3,West,Büro,,FALSE,
+41,B,323,Vortragsraum Empore,3,West,Vortragsraum,,FALSE,
+42,B,330,Flur,3,West,Flur,,FALSE,
+43,B,332,Seminarraum,3,Ost,Seminarraum,,FALSE,Raum 332/333
+44,B,333,Seminarraum,3,Ost,Seminarraum,,FALSE,Raum 332/333
+45,B,340,Seminarraum,3,Ost,Seminarraum,,FALSE,
+46,B,392,,3,West,TRH,,FALSE,TRH1 Raum 392
+47,B,394,,3,West,TRH,,FALSE,TRH2 Raum 394
+48,B,396,,3,Ost,TRH,,FALSE,TRH3 Raum 396
+49,B,421,Büro,4,West,Büro,,FALSE,
+50,B,422,Büro,4,West,Büro,,FALSE,
+51,B,423,Büro,4,West,Büro,,FALSE,
+52,B,424,Büro,4,Ost,Büro,,FALSE,
+53,B,425,Büro,4,Ost,Büro,,FALSE,
+54,B,426,Büro,4,Ost,Büro,,FALSE,
+55,B,427,Büro,4,Ost,Büro,,FALSE,
+56,B,428,Büro,4,Ost,Büro,,FALSE,
+57,B,429,Büro,4,Ost,Büro,,FALSE,
+58,B,430,Büro,4,Ost,Büro,,FALSE,
+59,B,431,Büro,4,Ost,Büro,,FALSE,
+60,B,432,Büro,4,Ost,Büro,,FALSE,
+61,B,433,Büro,4,Ost,Büro,,FALSE,
+62,B,434,Büro,4,Ost,Büro,,FALSE,
+63,B,435,,4,Ost,Lager,,FALSE,
+64,B,437,,4,Ost,Lager,,FALSE,
+65,B,439,,4,Ost,Lager,,FALSE,
+66,B,441,Seminarraum,4,West,Seminarraum,,FALSE,
+67,B,442,Seminarraum,4,West,Seminarraum,,FALSE,
+68,B,492,,4,West,TRH,,FALSE,TRH1 Raum 492
+69,B,492F,,4,West,TRH,,FALSE,
+70,B,494,,4,West,TRH,,FALSE,TRH2 Raum 494
+71,B,515,Lager,5,Ost,Lager,,FALSE,
+72,B,516,Lager,5,Ost,Lager,,FALSE,
+73,B,542,,5,Ost,Lager,,FALSE,
+74,B,543,,5,Ost,Lager,,FALSE,
+75,B,T04,,UG,West,TRH,,FALSE,TRHT04
+76,B,ZB,Zentralbatterie,UG,West,Technik,,FALSE,Neu: Raum für Zentralbatterie
