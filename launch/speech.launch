@@ -1,21 +1,4 @@
 <launch>
-    <!-- 1. ARGUMENTE (Einstellbar beim Start) -->
-    <!-- Damit kannst du schreiben: roslaunch speech_in speech.launch mic:=2 -->
-    <arg name="mic" default="1" />
-    
-    <!-- Automatische Pfad-Suche zu den Modellen -->
-    <arg name="model_de" default="$(find speech_in)/models/model_de" />
-    <arg name="model_en" default="$(find speech_in)/models/model_en" />
-
-    <!-- 2. NODE -->
-    <node name="speech_node" pkg="speech_in" type="speech_node.py" output="screen">
-        
-        <!-- Hier wird das Argument von oben an den Python-Code durchgereicht -->
-        <param name="device_index" value="$(arg mic)" />
-        
-        <!-- Pfade an Python übergeben -->
-        <param name="model_path_de" value="$(arg model_de)" />
-        <param name="model_path_en" value="$(arg model_en)" />
-        
+    <node pkg="speech_in" type="speech_node.py" name="speech_node" output="screen">
     </node>
 </launch>
