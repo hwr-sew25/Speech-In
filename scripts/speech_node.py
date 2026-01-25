@@ -8,41 +8,21 @@ import subprocess
 import rospy
 import time
 import csv
-from std_msgs.msg import String
+
+# --- WICHTIG: Pfad zu den generierten Messages ---
+# Fügt den Pfad hinzu, damit Python das Modul 'speech_in' findet
+sys.path.append("/home/ubuntu/catkin_ws/src/Messages/generated_msgs")
+
+from std_msgs.msg import String  # Brauchen wir ggf. nicht mehr, aber stört nicht
+from speech_in.msg import SpeechCommand, SpeechStatus  # <-- NEUE IMPORTS
+
 from vosk import Model, KaldiRecognizer
 
-# --- ROS PARAMETER LADEN (Statt Hardcoding) ---
-# Wir holen die Pfade jetzt dynamisch.
-# Wenn nichts kommt, nutzen wir relative Pfade als Fallback.
-
-def get_params():
-    # Helper um Pfade relativ zum Paket zu finden, falls nötig
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    
-    # Defaults (relativ)
-    default_model_de = os.path.join(base_dir, "models/model_de")
-    default_model_en = os.path.join(base_dir, "models/model_en")
-    default_csv = os.path.join(base_dir, "config/rooms.csv")
-    
-    # ROS Parameter lesen (Private Namespace '~')
-    model_de = rospy.get_param('~model_path_de', default_model_de)
-    model_en = rospy.get_param('~model_path_en', default_model_en)
-    csv_path = rospy.get_param('~csv_path', default_csv)
-    
-    # Device ID: Kann "1" (int) oder "plughw:1,0" (string) sein.
-    # Dein alter Code nutzt "arecord", das braucht Strings wie "plughw:1,0".
-    # Wenn wir nur "1" bekommen, basteln wir "plughw:1,0" daraus.
-    device_arg = rospy.get_param('~device_index', "plughw:1,0")
-    if str(device_arg).isdigit():
-        alsa_device = f"plughw:{device_arg},0"
-    else:
-        alsa_device = str(device_arg)
-        
-    return model_de, model_en, csv_path, alsa_device
-
-# Parameter holen (global für Zugriff in Funktionen, wenn nötig, aber besser in main)
-# Wir setzen diese Variablen später in der main() richtig.
-
+# --- KONFIGURATION ---
+MODEL_PATH_DE = "/home/ubuntu/catkin_ws/src/speech_in/models/model_de"
+MODEL_PATH_EN = "/home/ubuntu/catkin_ws/src/speech_in/models/model_en"
+CSV_PATH = "/home/ubuntu/catkin_ws/src/speech_in/config/rooms.csv"
+ALSA_DEVICE = "plughw:1,0" 
 TIMEOUT_SECONDS = 7 
 
 # --- WORTSCHATZ ---
@@ -65,7 +45,7 @@ FLOOR_MAPPING = {
     "ground": "EG", "first": "1", "one": "1", "second": "2", "two": "2", "third": "3", "three": "3", "fourth": "4", "four": "4"
 }
 
-# --- PARSER (Dein Original-Code) ---
+# --- PARSER ---
 def german_word_to_int(word):
     units = {'eins':1,'ein':1,'zwei':2,'zwo':2,'drei':3,'vier':4,'fünf':5,'sechs':6,'sieben':7,'acht':8,'neun':9,'zehn':10,'elf':11,'zwölf':12,'sechzehn':16,'siebzehn':17}
     tens = {'zwanzig':20,'dreißig':30,'vierzig':40,'fünfzig':50,'sechzig':60,'siebzig':70,'achtzig':80,'neunzig':90}
@@ -134,50 +114,28 @@ def parse_spoken_text(text, lang='de'):
         return parse_english_number_string(text)
     return None
 
-def load_rooms(csv_path):
+def load_rooms():
     rooms = {}
-    if os.path.exists(csv_path):
+    if os.path.exists(CSV_PATH):
         try:
-            with open(csv_path, 'r') as f:
-                reader = csv.reader(f, delimiter=';'); # Sicherheitshalber Semikolon oder Auto-Detect
-                # Header skippen ist tricky, wenn CSV keinen hat. Dein Code machte next(reader, None).
-                # Besser: Wir schauen uns die erste Zeile an.
-                try:
-                    header = next(reader, None)
-                    # Falls erste Zeile schon Daten sind (ID ist Zahl), dann nutzen.
-                    # Aber meistens ist Header da.
-                except StopIteration:
-                    return {}
-
+            with open(CSV_PATH, 'r') as f:
+                reader = csv.reader(f); next(reader, None)
                 for row in reader:
-                    # Dein CSV Parser ist sehr spezifisch auf Spalten-Index.
-                    # Wir lassen das so, hoffen dass CSV Format stabil ist.
                     if len(row) > 2:
-                        # Index-Check gegen IndexOutOfRange
-                        rid = row[0] if len(row) > 0 else ""
-                        bid = row[1] if len(row) > 1 else ""
-                        oid = row[2].strip() if len(row) > 2 else ""
-                        rname = row[3] if len(row) > 3 else ""
-                        fl = row[4] if len(row) > 4 else ""
-                        wg = row[5] if len(row) > 5 else ""
-                        cat = row[6] if len(row) > 6 else ""
-                        gen = row[7] if len(row) > 7 else ""
-                        acc = row[8] if len(row) > 8 else ""
-                        notiz = row[9] if len(row) > 9 else ""
-
+                        original_id = row[2].strip()
                         data = {
-                            "id": rid, "building": bid, "room_id": oid, 
-                            "room_name": rname, "floor": fl, "wing": wg, 
-                            "category": cat, "gender": gen, "accessible": acc, 
-                            "notes": notiz
+                            "id": row[0], "building": row[1], "room_id": original_id, 
+                            "room_name": row[3], "floor": row[4], "wing": row[5], 
+                            "category": row[6], "gender": row[7], "accessible": row[8], 
+                            "notes": row[9] if len(row)>9 else ""
                         }
-                        rooms[oid] = data
-                        rooms[oid.replace('.', '')] = data
-                        no_dots = oid.replace('.', '')
+                        rooms[original_id] = data
+                        rooms[original_id.replace('.', '')] = data
+                        no_dots = original_id.replace('.', '')
                         rooms[no_dots.lstrip('0')] = data
-                        if oid == "0.10": rooms["10"] = data
+                        if original_id == "0.10": rooms["10"] = data
         except Exception as e: rospy.logerr(f"CSV Fehler: {e}")
-    else: rospy.logwarn(f"CSV Datei nicht gefunden: {csv_path}")
+    else: rospy.logwarn("CSV Datei nicht gefunden!")
     return rooms
 
 def find_special_location(category_keyword, text, rooms):
@@ -205,46 +163,25 @@ def find_special_location(category_keyword, text, rooms):
 def main():
     rospy.init_node('speech_control', anonymous=True)
     
-    # PARAMETER LADEN (Jetzt dynamisch!)
-    model_path_de, model_path_en, csv_path_val, alsa_device_val = get_params()
-
-    rospy.loginfo(f"Konfiguration: Device={alsa_device_val}, CSV={csv_path_val}")
-
-    pub_cmd = rospy.Publisher('/speech_command', String, queue_size=10)
-    pub_out = rospy.Publisher('/speech_output', String, queue_size=10)
+    # --- PUBLISHER ÄNDERUNGEN ---
+    # pub_cmd sendet jetzt SpeechCommand statt String
+    pub_cmd = rospy.Publisher('/speech_command', SpeechCommand, queue_size=10)
+    # pub_out sendet jetzt SpeechStatus statt String
+    pub_out = rospy.Publisher('/speech_output', SpeechStatus, queue_size=10)
     
-    rooms = load_rooms(csv_path_val)
+    rooms = load_rooms()
     rospy.loginfo(f"{len(rooms)} Räume geladen.")
 
     rec_de, rec_en = None, None
-    
-    # Modelle laden mit besserem Error Handling
-    if os.path.exists(model_path_de): 
-        try:
-            rec_de = KaldiRecognizer(Model(model_path_de), 16000)
-        except Exception as e:
-            rospy.logerr(f"Konnte DE Modell nicht laden: {e}")
-            
-    if os.path.exists(model_path_en): 
-        try:
-            rec_en = KaldiRecognizer(Model(model_path_en), 16000)
-        except Exception as e:
-            rospy.logerr(f"Konnte EN Modell nicht laden: {e}")
+    if os.path.exists(MODEL_PATH_DE): rec_de = KaldiRecognizer(Model(MODEL_PATH_DE), 16000)
+    if os.path.exists(MODEL_PATH_EN): rec_en = KaldiRecognizer(Model(MODEL_PATH_EN), 16000)
 
     if not rec_de and not rec_en:
-        rospy.logerr("KEINE MODELLE GELADEN! Pfade prüfen.")
+        rospy.logerr("Keine Modelle!")
         sys.exit(1)
 
-    # ARECORD STARTEN
-    # Wichtig: alsa_device_val kommt jetzt aus der Launch File
-    command = ["arecord", "-D", alsa_device_val, "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw", "-q"]
-    
-    try:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except Exception as e:
-        rospy.logerr(f"Konnte 'arecord' nicht starten: {e}")
-        sys.exit(1)
-
+    command = ["arecord", "-D", ALSA_DEVICE, "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw", "-q"]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     rospy.loginfo("Speech-In BEREIT! (Monitoring gestartet)")
 
     last_interaction = time.time()
@@ -253,20 +190,20 @@ def main():
     try:
         while not rospy.is_shutdown():
             data = process.stdout.read(4000)
-            if len(data) == 0: 
-                # Prozess evtl gestorben?
-                if process.poll() is not None:
-                    rospy.logerr("Audio-Prozess beendet.")
-                    break
-                continue
+            if len(data) == 0: break
             
-            # Timeout Logik
             if time.time() - last_interaction > TIMEOUT_SECONDS:
                 if not timeout_sent:
-                    # Nur Warnung, kein Abbruch
-                    # rospy.logwarn("Timeout: 7 Sekunden Stille.")
-                    msg = json.dumps({"event": "timeout"}, ensure_ascii=False)
-                    pub_out.publish(String(msg))
+                    rospy.logwarn("Timeout: 7 Sekunden Stille.")
+                    
+                    # --- STATUS: TIMEOUT ---
+                    stat_msg = SpeechStatus()
+                    stat_msg.header.stamp = rospy.Time.now()
+                    stat_msg.level = "WARN"
+                    stat_msg.event = "TIMEOUT"
+                    stat_msg.message = "Keine Eingabe (Timeout)"
+                    pub_out.publish(stat_msg)
+                    
                     timeout_sent = True
                     last_interaction = time.time()
             
@@ -276,10 +213,8 @@ def main():
             if rec_en and rec_en.AcceptWaveform(data):
                 res_en = json.loads(rec_en.Result()).get('text', '')
 
-            if res_de: 
-                rospy.loginfo(f"[DE]: {res_de}")
-            if res_en: 
-                rospy.loginfo(f"[EN]: {res_en}")
+            if res_de: print(f"[DE]: {res_de}")
+            if res_en: print(f"[EN]: {res_en}")
 
             winner_text, winner_lang = None, None
             if any(t in res_de for t in TRIGGERS_DE): winner_text, winner_lang = res_de, 'de'
@@ -305,24 +240,31 @@ def main():
                         elif parsed_id.replace('.','') in rooms: found_room_data = rooms[parsed_id.replace('.','')]
 
                 if found_room_data:
-                    final_cmd = {
-                        "room_id": found_room_data["room_id"],
-                        "floor": found_room_data["floor"],
-                        "wing": found_room_data["wing"]
-                    }
-                    json_str = json.dumps(final_cmd, ensure_ascii=False)
-                    rospy.loginfo(f"--> TREFFER: {json_str}")
-                    pub_cmd.publish(String(json_str))
+                    # --- BEFEHL SENDEN (COMMAND) ---
+                    cmd_msg = SpeechCommand()
+                    cmd_msg.header.stamp = rospy.Time.now()
+                    cmd_msg.target = "room"
+                    cmd_msg.room_id = found_room_data["room_id"]
+                    cmd_msg.floor = found_room_data["floor"]
+                    cmd_msg.wing = found_room_data["wing"]
+                    
+                    rospy.loginfo(f"--> TREFFER: Raum {cmd_msg.room_id}")
+                    pub_cmd.publish(cmd_msg)
+                    
                 else:
                     rospy.logwarn(f"Verstanden: '{winner_text}', aber Ziel unbekannt.")
-                    error_msg = {
-                        "event": "unknown_room",
-                        "transcript": winner_text
-                    }
-                    pub_out.publish(String(json.dumps(error_msg, ensure_ascii=False)))
+                    
+                    # --- STATUS SENDEN: UNKNOWN ---
+                    stat_msg = SpeechStatus()
+                    stat_msg.header.stamp = rospy.Time.now()
+                    stat_msg.level = "WARN"
+                    stat_msg.event = "UNKNOWN_ROOM"
+                    stat_msg.transcript = winner_text
+                    stat_msg.message = "Raum nicht gefunden"
+                    pub_out.publish(stat_msg)
 
     except Exception as e:
-        rospy.logerr(f"Fehler in Main Loop: {e}")
+        rospy.logerr(f"Fehler: {e}")
     finally:
         process.terminate()
 
