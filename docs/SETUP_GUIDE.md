@@ -1,4 +1,4 @@
-# 📖 Speech Interface Implementation Guide
+# Speech Interface Implementation Guide
 
 **Author:** Team Speech-In  
 **Component:** Offline Speech Recognition & Command Parsing  
@@ -11,10 +11,10 @@ This guide explains how to replicate the **offline speech recognition system** b
 The module enables a robot to understand spoken navigation commands (e.g., "Drive to the Kitchen") without an internet connection.
 
 **Key Features:**
-*   🗣️ **Offline Speech-to-Text:** Powered by Vosk (Neural Network).
-*   🧠 **Command Parsing:** Converts spoken sentences into structured JSON commands.
-*   🗺️ **Dynamic Room Mapping:** Uses a CSV database (`rooms.csv`) to resolve room names to IDs.
-*   ⚙️ **Configurable Hardware:** Easy microphone selection via launch arguments.
+*    **Offline Speech-to-Text:** Powered by Vosk (Neural Network).
+*    **Command Parsing:** Converts spoken sentences into structured JSON commands.
+*    **Dynamic Room Mapping:** Uses a CSV database (`rooms.csv`) to resolve room names to IDs.
+*    **Configurable Hardware:** Easy microphone selection via launch arguments.
 
 ---
 
