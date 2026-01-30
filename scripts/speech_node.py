@@ -13,8 +13,8 @@ import csv
 # Fügt den Pfad hinzu, damit Python das Modul 'speech_in' findet
 sys.path.append("/home/ubuntu/catkin_ws/src/Messages/generated_msgs")
 
-from std_msgs.msg import String  # Brauchen wir ggf. nicht mehr, aber stört nicht
-from speech_in.msg import SpeechCommand, SpeechStatus  # <-- NEUE IMPORTS
+from std_msgs.msg import String  
+from speech_in.msg import SpeechCommand, SpeechStatus 
 
 from vosk import Model, KaldiRecognizer
 
