@@ -8,6 +8,7 @@ import queue
 import sounddevice as sd
 import vosk
 import rospy
+import rospkg  # Wichtig für dynamische Pfade
 import time
 import re
 import numpy as np 
@@ -31,14 +32,26 @@ class SpeechNode:
         self.start_listening_time = 0
         self.TIMEOUT_SEC = 8.0 
         
-        self.locations_file = "/home/ubuntu/catkin_ws/src/speech_in/data/locations.csv"
+        # --- FIX: DYNAMISCHE PFADE (WICHTIG!) ---
+        # Holt den Pfad zum Paket, egal wo es liegt oder wie der Nutzer heißt
+        rospack = rospkg.RosPack()
+        try:
+            pkg_path = rospack.get_path('speech_in')
+        except:
+            # Fallback, falls das Paket nicht gefunden wird (z.B. lokaler Test)
+            pkg_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        # Pfad zur CSV (angepasst an GitHub: config/rooms.csv)
+        self.locations_file = os.path.join(pkg_path, "config", "rooms.csv")
         self.locations = self.load_locations(self.locations_file)
 
-        model_path_de = "/home/ubuntu/catkin_ws/src/speech_in/models/model_de"
-        model_path_en = "/home/ubuntu/catkin_ws/src/speech_in/models/model_en"
+        # Pfade zu den Modellen (angepasst an GitHub: models/...)
+        model_path_de = os.path.join(pkg_path, "models", "model_de")
+        model_path_en = os.path.join(pkg_path, "models", "model_en")
+        # ----------------------------------------
 
         if not os.path.exists(model_path_de) or not os.path.exists(model_path_en):
-            rospy.logerr("Modelle fehlen! Bitte Pfade prüfen.")
+            rospy.logerr(f"Modelle fehlen in {pkg_path}/models! Bitte Pfade prüfen.")
             sys.exit(1)
             
         # VOKABULAR
@@ -69,7 +82,7 @@ class SpeechNode:
         self.rec_de = vosk.KaldiRecognizer(self.model_de, self.samplerate, vocab_json)
         self.rec_en = vosk.KaldiRecognizer(self.model_en, self.samplerate, vocab_json)
         
-        rospy.loginfo("Speech-In BEREIT! (Float-Match Fix)")
+        rospy.loginfo("Speech-In BEREIT! ")
 
     def find_device_index(self):
         devices = sd.query_devices()
@@ -84,7 +97,9 @@ class SpeechNode:
 
     def load_locations(self, filepath):
         locs = {}
-        if not os.path.exists(filepath): return locs
+        if not os.path.exists(filepath): 
+            rospy.logwarn(f"Locations Datei nicht gefunden: {filepath}")
+            return locs
         with open(filepath, 'r') as f:
             for line in f:
                 parts = line.strip().split(',')
@@ -143,6 +158,7 @@ class SpeechNode:
                 
         clean_str = " ".join(res)
         
+        # Regex korrigiert (Python raw strings)
         clean_str = re.sub(r'\b([1-9])\s+10\b', r'1\1', clean_str) 
         clean_str = re.sub(r'\b(\d+)\s+(\d+)\b', r'\1.\2', clean_str) 
         clean_str = clean_str.replace("..", ".")
