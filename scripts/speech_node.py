@@ -4,269 +4,306 @@
 import os
 import sys
 import json
-import subprocess
+import queue
+import sounddevice as sd
+import vosk
 import rospy
 import time
-import csv
+import re
+import numpy as np 
 
-# --- WICHTIG: Pfad zu den generierten Messages ---
-# Fügt den Pfad hinzu, damit Python das Modul 'speech_in' findet
-sys.path.append("/home/ubuntu/catkin_ws/src/Messages/generated_msgs")
+from std_msgs.msg import String, Header
+from speech_in.msg import SpeechCommand, SpeechStatus
 
-from std_msgs.msg import String  
-from speech_in.msg import SpeechCommand, SpeechStatus 
+class SpeechNode:
+    def __init__(self):
+        rospy.init_node('speech_node', anonymous=True)
+        
+        self.samplerate = 16000
+        self.device_index = self.find_device_index() 
+        
+        self.pub_command = rospy.Publisher('/speech_command', SpeechCommand, queue_size=10)
+        self.pub_status = rospy.Publisher('/speech_output', SpeechStatus, queue_size=10)
+        rospy.Subscriber('/language', String, self.language_callback)
+        
+        self.q = queue.Queue()
+        self.active = False
+        self.start_listening_time = 0
+        self.TIMEOUT_SEC = 8.0 
+        
+        self.locations_file = "/home/ubuntu/catkin_ws/src/speech_in/data/locations.csv"
+        self.locations = self.load_locations(self.locations_file)
 
-from vosk import Model, KaldiRecognizer
+        model_path_de = "/home/ubuntu/catkin_ws/src/speech_in/models/model_de"
+        model_path_en = "/home/ubuntu/catkin_ws/src/speech_in/models/model_en"
 
-# --- KONFIGURATION ---
-MODEL_PATH_DE = "/home/ubuntu/catkin_ws/src/speech_in/models/model_de"
-MODEL_PATH_EN = "/home/ubuntu/catkin_ws/src/speech_in/models/model_en"
-CSV_PATH = "/home/ubuntu/catkin_ws/src/speech_in/config/rooms.csv"
-ALSA_DEVICE = "plughw:1,0" 
-TIMEOUT_SECONDS = 7 
+        if not os.path.exists(model_path_de) or not os.path.exists(model_path_en):
+            rospy.logerr("Modelle fehlen! Bitte Pfade prüfen.")
+            sys.exit(1)
+            
+        # VOKABULAR
+        vocabulary = [
+            "eins", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun", "zehn", 
+            "elf", "zwölf", "null", "hundert", "und", "punkt", "komma",
+            "erste", "zweite", "dritte", "vierte", "fünfte",
+            "zwanzig", "dreißig", "vierzig", "fünfzig", 
+            "raum", "wo", "ist", "finde", "suche", "navigiere", "bringe", "mich", "zu",
+            "wc", "toilette", "klo", "herren", "damen", "nummer", "etage", "stock", "ebene",
+            "im", "in", "am", "an", "dem", "den", "der", "die", "das", "zum", "zur", "neben", "auf",
+            "ich", "du", "wir", "möchte", "will", "muss", "kann", "darf", "bitte", "soll", "habe",
+            "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+            "eleven", "twelve", "zero", "hundred", "first", "second", "third", "fourth", "fifth",
+            "twenty", "thirty", "forty", "fifty", "point", "dot",
+            "floor", "room", "where", "is", "find", "search", "navigate", "go", "to",
+            "bathroom", "restroom", "toilet", "ladies", "mens", "number", "level", 
+            "at", "the", "please", "i", "want", "need", "can",
+            "[unk]"
+        ]
+        
+        vocab_json = json.dumps(vocabulary)
+        rospy.loginfo(f"Lade Modelle... ({len(vocabulary)} Wörter)")
 
-# --- WORTSCHATZ ---
-TRIGGERS_DE = ["raum", "zimmer", "büro", "saal", "labor", "werkstatt", "wc", "toilette", "klo", "bad", "mensa", "kantine"]
-TRIGGERS_EN = ["room", "office", "hall", "lab", "chamber", "restroom", "bathroom", "toilet", "canteen", "cafeteria"]
+        self.model_de = vosk.Model(model_path_de)
+        self.model_en = vosk.Model(model_path_en)
 
-CATEGORY_MAPPING = {
-    "wc": "WC", "toilette": "WC", "klo": "WC", "bad": "WC", 
-    "mensa": "Mensa", "kantine": "Mensa",
-    "restroom": "WC", "bathroom": "WC", "toilet": "WC"
-}
+        self.rec_de = vosk.KaldiRecognizer(self.model_de, self.samplerate, vocab_json)
+        self.rec_en = vosk.KaldiRecognizer(self.model_en, self.samplerate, vocab_json)
+        
+        rospy.loginfo("Speech-In BEREIT! (Float-Match Fix)")
 
-FLOOR_MAPPING = {
-    "erdgeschoss": "EG", "unten": "EG", "eingang": "EG", 
-    "ersten": "1", "eins": "1", "erste": "1",
-    "zweiten": "2", "zwei": "2", "zweite": "2",
-    "dritten": "3", "drei": "3", "dritte": "3",
-    "vierten": "4", "vier": "4", "vierte": "4",
-    "fünften": "5", "fünf": "5", "fünfte": "5",
-    "ground": "EG", "first": "1", "one": "1", "second": "2", "two": "2", "third": "3", "three": "3", "fourth": "4", "four": "4"
-}
+    def find_device_index(self):
+        devices = sd.query_devices()
+        for i, dev in enumerate(devices):
+            name = dev['name'].lower()
+            if dev['max_input_channels'] > 0:
+                if 'respeaker' in name or ('usb' in name and 'mic' in name):
+                    rospy.loginfo(f"Auto-Detect: ReSpeaker/USB Mic gefunden auf Index {i} ({dev['name']})")
+                    return i
+        try: return sd.default.device[0]
+        except: return None
 
-# --- PARSER ---
-def german_word_to_int(word):
-    units = {'eins':1,'ein':1,'zwei':2,'zwo':2,'drei':3,'vier':4,'fünf':5,'sechs':6,'sieben':7,'acht':8,'neun':9,'zehn':10,'elf':11,'zwölf':12,'sechzehn':16,'siebzehn':17}
-    tens = {'zwanzig':20,'dreißig':30,'vierzig':40,'fünfzig':50,'sechzig':60,'siebzig':70,'achtzig':80,'neunzig':90}
-    total = 0
-    if 'hundert' in word:
-        parts = word.split('hundert', 1)
-        prefix = parts[0]; remainder = parts[1]; mult = 1
-        if prefix and prefix in units: mult = units[prefix]
-        total += mult * 100
-        word = remainder
-    if not word: return total
-    if word in units: total += units[word]
-    elif word in tens: total += tens[word]
-    elif 'und' in word:
-        p = word.split('und', 1)
-        if len(p)==2: total += units.get(p[0], 0) + tens.get(p[1], 0)
-    elif word.endswith('zehn'):
-        prefix = word.replace('zehn','')
-        if prefix in units: total += units[prefix] + 10
-        elif prefix == 'sech': total += 16
-        elif prefix == 'sieb': total += 17
-    return total
+    def load_locations(self, filepath):
+        locs = {}
+        if not os.path.exists(filepath): return locs
+        with open(filepath, 'r') as f:
+            for line in f:
+                parts = line.strip().split(',')
+                if len(parts) >= 3:
+                    key = parts[0].strip().lower().replace("dritte", "3").replace("vierte", "4")
+                    room_id = parts[1].strip()
+                    try: floor = int(parts[2].strip())
+                    except: floor = 0
+                    locs[key] = {"target": room_id, "floor": floor}
+        return locs
 
-def parse_english_number_string(text):
-    units = {'zero':0,'one':1,'two':2,'three':3,'four':4,'five':5,'six':6,'seven':7,'eight':8,'nine':9,'ten':10,'eleven':11,'twelve':12,'thirteen':13,'fourteen':14,'fifteen':15}
-    tens = {'twenty':20,'thirty':30,'forty':40,'fifty':50,'sixty':60,'seventy':70,'eighty':80,'ninety':90}
-    multipliers = {'hundred':100, 'thousand':1000}
-    words = text.split()
-    has_structure = any(w in multipliers or w in tens for w in words)
-    if not has_structure:
-        digit_seq = []
+    def text2int(self, text):
+        t = text.lower()
+        
+        # Hundert-Logik
+        single_digits = ["eins", "ein", "zwei", "zwo", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun"]
+        for digit in single_digits:
+            if f"{digit} hundert" in t:
+                t = t.replace(f"{digit} hundert", f"{digit}")
+        t = t.replace("hundert", "1")
+        
+        mapping = {
+            "eins": "1", "ein": "1", "eine": "1", "zwei": "2", "zwo": "2",
+            "drei": "3", "vier": "4", "fünf": "5", "sechs": "6", "sieben": "7",
+            "acht": "8", "neun": "9", "null": "0", "zehn": "10", "elf": "11", "zwölf": "12",
+            "und": "", "punkt": ".", "komma": ".", 
+            "zwanzig": "20", "dreißig": "30", "vierzig": "40", "fünfzig": "50",
+            "erste": "1", "ersten": "1", "zweite": "2", "zweiten": "2", 
+            "dritte": "3", "dritten": "3", "vierte": "4", "vierten": "4",
+            "fünfte": "5", "fünften": "5", "etage": "", "stock": "", "ebene": "",
+            "im": "", "in": "", "am": "", "an": "", "dem": "", "den": "", 
+            "der": "", "die": "", "das": "", "zum": "", "zur": "", "neben": "", "auf": "",
+            "ich": "", "du": "", "wir": "", "möchte": "", "will": "", "muss": "", 
+            "kann": "", "darf": "", "bitte": "", "soll": "", "habe": "", "is": "",
+            "nummer": "", "number": "", "nur": "", "no": "", "search": "",
+            "toilette": "wc", "klo": "wc", "bedürfnisanstalt": "wc", "sanitärraum": "wc", 
+            "waschraum": "wc", "toilet": "wc", "bathroom": "wc", "restroom": "wc", 
+            "ladies": "wc", "mens": "wc",
+            "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+            "six": "6", "seven": "7", "eight": "8", "nine": "9", "zero": "0",
+            "ten": "10", "eleven": "11", "twelve": "12",
+            "twenty": "20", "thirty": "30", "forty": "40", "fifty": "50",
+            "point": ".", "dot": ".", 
+            "first": "1", "second": "2", "third": "3", "fourth": "4", "fifth": "5",
+            "floor": "", "at": "", "the": "", "please": "", "i": "", "want": "", "need": "", "can": ""
+        }
+        
+        words = t.split()
+        res = []
         for w in words:
-            if w in units and units[w] < 10: digit_seq.append(str(units[w]))
-            elif w.isdigit(): digit_seq.append(w)
-            elif w in ['point','dot']: digit_seq.append('.')
-        if len(digit_seq) > 0: return "".join(digit_seq)
-    current_val, total_val = 0, 0
-    found_num = False
-    for w in words:
-        if w in units: current_val += units[w]; found_num=True
-        elif w in tens: current_val += tens[w]; found_num=True
-        elif w in multipliers:
-            current_val = max(1, current_val) * multipliers[w]
-            total_val += current_val; current_val = 0; found_num = True
-    total_val += current_val
-    return str(total_val) if found_num and total_val >= 0 else None
+            if w in mapping:
+                val = mapping[w]
+                if val != "": res.append(val)
+            else:
+                res.append(w)
+                
+        clean_str = " ".join(res)
+        
+        clean_str = re.sub(r'\b([1-9])\s+10\b', r'1\1', clean_str) 
+        clean_str = re.sub(r'\b(\d+)\s+(\d+)\b', r'\1.\2', clean_str) 
+        clean_str = clean_str.replace("..", ".")
+        clean_str = clean_str.replace(".0.", ".0") 
+        
+        # FIX: Schwebende Punkte entfernen (für "2 . 3.9")
+        clean_str = re.sub(r'\s*\.\s*', '.', clean_str)
+        
+        return clean_str
 
-def parse_spoken_text(text, lang='de'):
-    text = text.lower()
-    if lang == 'de':
-        text = text.replace("hundert ", "hundert").replace("tausend ", "tausend").replace(" und ", "und")
-        words = text.split()
-        dmap = {'eins':'1','zwei':'2','zwo':'2','drei':'3','vier':'4','fünf':'5','sechs':'6','sieben':'7','acht':'8','neun':'9','null':'0','punkt':'.'}
-        digits = []
-        for w in words:
-            if w in dmap: digits.append(dmap[w])
-            elif w.isdigit(): digits.append(w)
-        if len(digits) > 1 or (len(digits)==1 and '.' in digits): return "".join(digits)
-        for w in words:
-            if "hundert" in w or "zig" in w or "zehn" in w or "elf" in w or "zwölf" in w:
-                try: 
-                    v = german_word_to_int(w)
-                    if v > 0: return str(v)
+    def language_callback(self, msg):
+        if "off" in str(msg.data).lower():
+            self.active = False
+            rospy.loginfo("System Paused") 
+        else:
+            self.active = True
+            self.start_listening_time = time.time() + 0.5
+            rospy.loginfo("Listening...") 
+            with self.q.mutex: self.q.queue.clear()
+
+    def send_status(self, level, text):
+        msg = SpeechStatus()
+        msg.header = Header(stamp=rospy.Time.now())
+        msg.level = level
+        msg.message = text
+        self.pub_status.publish(msg)
+
+    def audio_callback(self, indata, frames, time, status):
+        if indata.shape[1] > 1:
+            mono_data = indata[:, 0]
+        else:
+            mono_data = indata
+        self.q.put(bytes(mono_data))
+
+    def process_text(self, text, lang_code):
+        text_clean = self.text2int(text)
+        
+        valid = ["raum", "wc", "room", "1", "2", "3", "4", "5", "0"]
+        if not any(x in text_clean for x in valid): return False
+
+        rospy.loginfo(f"[{lang_code}] Input: '{text}' -> Clean: '{text_clean}'")
+        
+        # 1. Keys
+        sorted_keys = sorted(self.locations.keys(), key=len, reverse=True)
+        for key in sorted_keys:
+            if key in text_clean:
+                val = self.locations[key]
+                rospy.loginfo(f"-> ZIEL GEFUNDEN: {val['target']} (Match: {key})")
+                self.publish_goal(val['target'], val['floor'])
+                msg = f"Fahre zu {val['target']}" if lang_code == "DE" else f"Going to {val['target']}"
+                if "wc" in key: msg = f"WC {val['target']} gefunden."
+                self.send_status("INFO", msg)
+                self.active = False 
+                return True
+            
+        detected_match = re.search(r'\b(\d+\.?\d+)\b', text_clean)
+        detected_num = detected_match.group(1) if detected_match else None
+
+        # 2. IDs
+        for key, val in self.locations.items():
+            target = val['target'].lower()
+            
+            if target in text_clean:
+                rospy.loginfo(f"-> ID DIREKT: {val['target']}")
+                self.publish_goal(val['target'], val['floor'])
+                self.send_status("INFO", f"Fahre zu {val['target']}")
+                self.active = False
+                return True
+            
+            if detected_num:
+                # String Match
+                if detected_num == target:
+                     rospy.loginfo(f"-> ID MATCH: {val['target']}")
+                     self.publish_goal(val['target'], val['floor'])
+                     self.send_status("INFO", f"Fahre zu {val['target']}")
+                     self.active = False
+                     return True
+
+                # Smart 0 Match
+                if detected_num + "0" == target:
+                    rospy.loginfo(f"-> ID SMART (0 end): {val['target']}")
+                    self.publish_goal(val['target'], val['floor'])
+                    self.send_status("INFO", f"Fahre zu {val['target']}")
+                    self.active = False
+                    return True
+                
+                # Smart Middle 0
+                parts = detected_num.split('.')
+                if len(parts) == 2 and len(parts[1]) == 1:
+                    if f"{parts[0]}.0{parts[1]}" == target:
+                        rospy.loginfo(f"-> ID SMART (0 mid): {val['target']}")
+                        self.publish_goal(val['target'], val['floor'])
+                        self.send_status("INFO", f"Fahre zu {val['target']}")
+                        self.active = False
+                        return True
+                        
+                # FIX: Float Match (1.40 == 1.4)
+                try:
+                    if float(detected_num) == float(target):
+                        rospy.loginfo(f"-> ID FLOAT MATCH: {val['target']}")
+                        self.publish_goal(val['target'], val['floor'])
+                        self.send_status("INFO", f"Fahre zu {val['target']}")
+                        self.active = False
+                        return True
                 except: pass
-    elif lang == 'en':
-        return parse_english_number_string(text)
-    return None
 
-def load_rooms():
-    rooms = {}
-    if os.path.exists(CSV_PATH):
+        if detected_num:
+            if "raum" in text_clean or "room" in text_clean or "wc" in text_clean:
+                err = f"Raum {detected_num} nicht gefunden." if lang_code == "DE" else f"Room {detected_num} not found."
+                rospy.logwarn(err)
+                self.send_status("ERROR", err)
+                self.active = False
+                return True
+
+        return False
+
+    def publish_goal(self, target, floor):
+        cmd = SpeechCommand()
+        cmd.header = Header(stamp=rospy.Time.now())
+        cmd.command = "navigate"
+        cmd.target = target
+        cmd.floor = floor
+        self.pub_command.publish(cmd)
+
+    def run(self):
+        if self.device_index is None: return
         try:
-            with open(CSV_PATH, 'r') as f:
-                reader = csv.reader(f); next(reader, None)
-                for row in reader:
-                    if len(row) > 2:
-                        original_id = row[2].strip()
-                        data = {
-                            "id": row[0], "building": row[1], "room_id": original_id, 
-                            "room_name": row[3], "floor": row[4], "wing": row[5], 
-                            "category": row[6], "gender": row[7], "accessible": row[8], 
-                            "notes": row[9] if len(row)>9 else ""
-                        }
-                        rooms[original_id] = data
-                        rooms[original_id.replace('.', '')] = data
-                        no_dots = original_id.replace('.', '')
-                        rooms[no_dots.lstrip('0')] = data
-                        if original_id == "0.10": rooms["10"] = data
-        except Exception as e: rospy.logerr(f"CSV Fehler: {e}")
-    else: rospy.logwarn("CSV Datei nicht gefunden!")
-    return rooms
-
-def find_special_location(category_keyword, text, rooms):
-    text = text.lower()
-    gender_filter = None
-    if "herren" in text or "men" in text: gender_filter = "Herren"
-    elif "damen" in text or "women" in text or "frauen" in text: gender_filter = "Damen"
-    elif "behindert" in text or "barrierefrei" in text or "accessible" in text: gender_filter = "TRUE"
-    floor_filter = None
-    for fw, suffix in FLOOR_MAPPING.items():
-        if fw in text: floor_filter = suffix; break
-    best_match = None
-    for rid, data in rooms.items():
-        cat_db = data["category"]
-        if category_keyword.lower() in cat_db.lower():
-            if floor_filter and data["floor"] != floor_filter: continue 
-            if gender_filter:
-                if gender_filter == "TRUE":
-                    if data["accessible"] != "TRUE": continue
-                elif gender_filter not in data["gender"]: continue
-            best_match = data
-            break
-    return best_match
-
-def main():
-    rospy.init_node('speech_control', anonymous=True)
-    
-    # --- PUBLISHER ÄNDERUNGEN ---
-    # pub_cmd sendet jetzt SpeechCommand statt String
-    pub_cmd = rospy.Publisher('/speech_command', SpeechCommand, queue_size=10)
-    # pub_out sendet jetzt SpeechStatus statt String
-    pub_out = rospy.Publisher('/speech_output', SpeechStatus, queue_size=10)
-    
-    rooms = load_rooms()
-    rospy.loginfo(f"{len(rooms)} Räume geladen.")
-
-    rec_de, rec_en = None, None
-    if os.path.exists(MODEL_PATH_DE): rec_de = KaldiRecognizer(Model(MODEL_PATH_DE), 16000)
-    if os.path.exists(MODEL_PATH_EN): rec_en = KaldiRecognizer(Model(MODEL_PATH_EN), 16000)
-
-    if not rec_de and not rec_en:
-        rospy.logerr("Keine Modelle!")
-        sys.exit(1)
-
-    command = ["arecord", "-D", ALSA_DEVICE, "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw", "-q"]
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    rospy.loginfo("Speech-In BEREIT! (Monitoring gestartet)")
-
-    last_interaction = time.time()
-    timeout_sent = False
-
-    try:
-        while not rospy.is_shutdown():
-            data = process.stdout.read(4000)
-            if len(data) == 0: break
-            
-            if time.time() - last_interaction > TIMEOUT_SECONDS:
-                if not timeout_sent:
-                    rospy.logwarn("Timeout: 7 Sekunden Stille.")
-                    
-                    # --- STATUS: TIMEOUT ---
-                    stat_msg = SpeechStatus()
-                    stat_msg.header.stamp = rospy.Time.now()
-                    stat_msg.level = "WARN"
-                    stat_msg.event = "TIMEOUT"
-                    stat_msg.message = "Keine Eingabe (Timeout)"
-                    pub_out.publish(stat_msg)
-                    
-                    timeout_sent = True
-                    last_interaction = time.time()
-            
-            res_de, res_en = "", ""
-            if rec_de and rec_de.AcceptWaveform(data):
-                res_de = json.loads(rec_de.Result()).get('text', '')
-            if rec_en and rec_en.AcceptWaveform(data):
-                res_en = json.loads(rec_en.Result()).get('text', '')
-
-            if res_de: print(f"[DE]: {res_de}")
-            if res_en: print(f"[EN]: {res_en}")
-
-            winner_text, winner_lang = None, None
-            if any(t in res_de for t in TRIGGERS_DE): winner_text, winner_lang = res_de, 'de'
-            elif any(t in res_en for t in TRIGGERS_EN): winner_text, winner_lang = res_en, 'en'
-            
-            if not winner_text:
-                pid = parse_spoken_text(res_de, 'de')
-                if pid and pid in rooms: winner_text, winner_lang = res_de, 'de'
-
-            if winner_text:
-                last_interaction = time.time()
-                timeout_sent = False
-                found_room_data = None
-                
-                for kw, cat in CATEGORY_MAPPING.items():
-                    if kw in winner_text:
-                        found_room_data = find_special_location(cat, winner_text, rooms); break
-                
-                if not found_room_data:
-                    parsed_id = parse_spoken_text(winner_text, winner_lang)
-                    if parsed_id:
-                        if parsed_id in rooms: found_room_data = rooms[parsed_id]
-                        elif parsed_id.replace('.','') in rooms: found_room_data = rooms[parsed_id.replace('.','')]
-
-                if found_room_data:
-                    # --- BEFEHL SENDEN (COMMAND) ---
-                    cmd_msg = SpeechCommand()
-                    cmd_msg.header.stamp = rospy.Time.now()
-                    cmd_msg.target = "room"
-                    cmd_msg.room_id = found_room_data["room_id"]
-                    cmd_msg.floor = found_room_data["floor"]
-                    cmd_msg.wing = found_room_data["wing"]
-                    
-                    rospy.loginfo(f"--> TREFFER: Raum {cmd_msg.room_id}")
-                    pub_cmd.publish(cmd_msg)
-                    
-                else:
-                    rospy.logwarn(f"Verstanden: '{winner_text}', aber Ziel unbekannt.")
-                    
-                    # --- STATUS SENDEN: UNKNOWN ---
-                    stat_msg = SpeechStatus()
-                    stat_msg.header.stamp = rospy.Time.now()
-                    stat_msg.level = "WARN"
-                    stat_msg.event = "UNKNOWN_ROOM"
-                    stat_msg.transcript = winner_text
-                    stat_msg.message = "Raum nicht gefunden"
-                    pub_out.publish(stat_msg)
-
-    except Exception as e:
-        rospy.logerr(f"Fehler: {e}")
-    finally:
-        process.terminate()
+            with sd.InputStream(samplerate=self.samplerate, device=self.device_index, 
+                                channels=2, dtype='int16', callback=self.audio_callback,
+                                latency='high'):
+                rospy.loginfo(f"Audio Stream läuft auf Device {self.device_index} (2 Kanäle).")
+                while not rospy.is_shutdown():
+                    if not self.active:
+                        time.sleep(0.1)
+                        with self.q.mutex: self.q.queue.clear()
+                        continue
+                    if (time.time() - self.start_listening_time) > self.TIMEOUT_SEC:
+                        self.send_status("ERROR", "Keine Eingabe (Timeout).")
+                        self.active = False
+                        continue
+                    if self.q.empty():
+                        time.sleep(0.01)
+                        continue
+                    data = self.q.get()
+                    if self.rec_de.AcceptWaveform(data):
+                        res = json.loads(self.rec_de.Result())
+                        txt = res.get("text", "")
+                        if txt and self.process_text(txt, "DE"):
+                            with self.q.mutex: self.q.queue.clear()
+                            continue
+                    if self.rec_en.AcceptWaveform(data):
+                        res = json.loads(self.rec_en.Result())
+                        txt = res.get("text", "")
+                        if txt and self.process_text(txt, "EN"):
+                            with self.q.mutex: self.q.queue.clear()
+                            continue
+        except Exception as e:
+            rospy.logerr(f"CRITICAL ERROR: {e}")
 
 if __name__ == '__main__':
-    main()
+    try:
+        SpeechNode().run()
+    except rospy.ROSInterruptException:
+        pass
